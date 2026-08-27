@@ -34,6 +34,31 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     }
   })
 
+  const assistantMessages = createMemo(() => msg().filter((item): item is AssistantMessage => item.role === "assistant"))
+
+  const sessionTotal = createMemo(() =>
+    assistantMessages().reduce(
+      (sum, item) =>
+        sum + item.tokens.input + item.tokens.output + item.tokens.reasoning + item.tokens.cache.read + item.tokens.cache.write,
+      0,
+    ),
+  )
+
+  const requestCount = createMemo(() => assistantMessages().length)
+
+  const cacheHitRatio = createMemo(() => {
+    const totals = assistantMessages().reduce(
+      (acc, item) => {
+        acc.read += item.tokens.cache.read
+        acc.input += item.tokens.input
+        return acc
+      },
+      { read: 0, input: 0 },
+    )
+    const denom = totals.read + totals.input
+    return denom > 0 ? Math.round((totals.read / denom) * 100) : null
+  })
+
   return (
     <box>
       <text fg={theme().text}>
@@ -42,6 +67,9 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       <text fg={theme().textMuted}>{state().tokens.toLocaleString()} tokens</text>
       <text fg={theme().textMuted}>{state().percent ?? 0}% used</text>
       <text fg={theme().textMuted}>{money.format(cost())} spent</text>
+      <text fg={theme().textMuted}>{sessionTotal().toLocaleString()} tokens used (session)</text>
+      <text fg={theme().textMuted}>{requestCount()} requests</text>
+      <text fg={theme().textMuted}>{cacheHitRatio() ?? 0}% cache hit</text>
     </box>
   )
 }
