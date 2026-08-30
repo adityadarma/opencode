@@ -464,6 +464,7 @@ export interface Interface {
     field: string
     delta: string
   }) => Effect.Effect<void>
+  readonly addUsage: (input: { sessionID: SessionID; cost: number; tokens: Info["tokens"] }) => Effect.Effect<void>
   /** Finds the first message matching the predicate, searching newest-first. */
   readonly findMessage: (
     sessionID: SessionID,
@@ -750,6 +751,27 @@ const layer: Layer.Layer<
       yield* patch(sessionID, { time: { updated: Date.now() } }).pipe(Effect.orDie)
     })
 
+    const addUsage = Effect.fn("Session.addUsage")(function* (input: {
+      sessionID: SessionID
+      cost: number
+      tokens: Info["tokens"]
+    }) {
+      const tokens = input.tokens ?? EmptyTokens
+      yield* db
+        .update(SessionTable)
+        .set({
+          cost: sql`${SessionTable.cost} + ${input.cost}`,
+          tokens_input: sql`${SessionTable.tokens_input} + ${tokens.input}`,
+          tokens_output: sql`${SessionTable.tokens_output} + ${tokens.output}`,
+          tokens_reasoning: sql`${SessionTable.tokens_reasoning} + ${tokens.reasoning}`,
+          tokens_cache_read: sql`${SessionTable.tokens_cache_read} + ${tokens.cache.read}`,
+          tokens_cache_write: sql`${SessionTable.tokens_cache_write} + ${tokens.cache.write}`,
+        })
+        .where(eq(SessionTable.id, input.sessionID))
+        .run()
+        .pipe(Effect.orDie)
+    })
+
     const setTitle = Effect.fn("Session.setTitle")(function* (input: { sessionID: SessionID; title: string }) {
       yield* patch(input.sessionID, { title: input.title }).pipe(Effect.orDie)
     })
@@ -910,6 +932,7 @@ const layer: Layer.Layer<
       fork,
       touch,
       get,
+      addUsage,
       setTitle,
       setArchived,
       setMetadata,

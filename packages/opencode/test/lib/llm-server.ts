@@ -6,6 +6,8 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 
 export type Usage = { input: number; output: number }
 
+export const TITLE_USAGE: Usage = { input: 11, output: 3 }
+
 type Line = Record<string, unknown>
 
 type Flow =
@@ -676,7 +678,11 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
         if (isTitleRequest(body)) {
           hits = [...hits, current]
           yield* notify()
-          const auto: Sse = { type: "sse", head: [role()], tail: [textLine("E2E Title"), finishLine("stop")] }
+          const auto: Sse = {
+            type: "sse",
+            head: [role()],
+            tail: [textLine("E2E Title"), finishLine("stop", TITLE_USAGE)],
+          }
           if (mode === "responses") return send(responses(auto, modelFrom(body)))
           return send(auto)
         }

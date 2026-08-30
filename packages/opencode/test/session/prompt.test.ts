@@ -52,7 +52,7 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Format } from "../../src/format"
 import { TestInstance } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
-import { reply, TestLLMServer } from "../lib/llm-server"
+import { reply, TestLLMServer, TITLE_USAGE } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -297,6 +297,26 @@ function providerCfg(url: string) {
         options: {
           ...cfg.provider.test.options,
           baseURL: url,
+        },
+      },
+    },
+  }
+}
+
+function providerCfgWithCost(url: string) {
+  const base = providerCfg(url)
+  return {
+    ...base,
+    provider: {
+      ...base.provider,
+      test: {
+        ...base.provider.test,
+        models: {
+          ...base.provider.test.models,
+          "test-model": {
+            ...base.provider.test.models["test-model"],
+            cost: { input: 1, output: 2 },
+          },
         },
       },
     },
@@ -671,6 +691,38 @@ it.instance("loop surfaces content-filter finishes as session errors", () =>
     expect(result.parts).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "text", text: "partial response" })]),
     )
+  }),
+)
+
+it.instance("title generation usage is added to session cost/tokens", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfgWithCost)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({})
+
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.text("world")
+
+    const before = yield* sessions.get(chat.id)
+    expect(before.cost ?? 0).toBe(0)
+
+    yield* prompt.loop({ sessionID: chat.id })
+
+    yield* pollWithTimeout(
+      sessions.get(chat.id).pipe(Effect.map((session) => (session.title === "E2E Title" ? true : undefined))),
+      "timed out waiting for title generation to complete",
+    )
+
+    const after = yield* sessions.get(chat.id)
+    expect(after.cost).toBeGreaterThan(0)
+    expect(after.tokens?.input).toBeGreaterThanOrEqual(TITLE_USAGE.input)
+    expect(after.tokens?.output).toBeGreaterThanOrEqual(TITLE_USAGE.output)
   }),
 )
 

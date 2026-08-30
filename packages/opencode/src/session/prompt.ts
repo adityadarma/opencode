@@ -222,7 +222,8 @@ const layer = Layer.effect(
       const msgs = onlySubtasks
         ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
         : yield* MessageV2.toModelMessagesEffect(context, mdl)
-      const text = yield* llm
+      let text = ""
+      yield* llm
         .stream({
           agent: ag,
           user: firstInfo,
@@ -235,9 +236,17 @@ const layer = Layer.effect(
           messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
         })
         .pipe(
-          Stream.filter(LLMEvent.is.textDelta),
-          Stream.map((e) => e.text),
-          Stream.mkString,
+          Stream.runForEach((event) =>
+            Effect.gen(function* () {
+              if (LLMEvent.is.textDelta(event)) {
+                text += event.text
+                return
+              }
+              if (!LLMEvent.is.stepFinish(event) || !event.usage) return
+              const usage = Session.getUsage({ model: mdl, usage: event.usage, metadata: event.providerMetadata })
+              yield* sessions.addUsage({ sessionID: input.session.id, cost: usage.cost, tokens: usage.tokens })
+            }),
+          ),
           Effect.orDie,
         )
       const cleaned = text
