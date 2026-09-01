@@ -23,7 +23,7 @@ for arg in "$@"; do
   esac
 done
 
-package_version="$(bun -e 'console.log(require("./package.json").version)')"
+package_version="$(bun -e 'console.log(require("./package.json").version)'):custom"
 
 echo "Building opencode ${package_version} for the current platform..."
 OPENCODE_VERSION="$package_version" bun run script/build.ts --single \

@@ -5809,3 +5809,122 @@ describe("ProviderTransform.options - kimi family adaptive thinking", () => {
     expect(result.thinking).toBeUndefined()
   })
 })
+
+describe("ProviderTransform.message - caller message mutation", () => {
+  const claudeModel = {
+    id: "9Router/claude-opus-5",
+    providerID: "9Router",
+    api: {
+      id: "claude-opus-5",
+      url: "https://example.invalid/v1",
+      npm: "@ai-sdk/openai-compatible",
+    },
+    name: "Claude Opus 5",
+    capabilities: {},
+    cost: { input: 0, output: 0 },
+    limit: { context: 200000, output: 8192 },
+    status: "active",
+    options: {},
+    headers: {},
+  } as any
+
+  test("writes cache control onto the caller's message objects", () => {
+    const shared = [
+      { role: "system", content: "SYSTEM" },
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+    ] as any[]
+    const before = structuredClone(shared)
+
+    ProviderTransform.message(shared, claudeModel, {})
+
+    // Documents current behaviour: the input is not left untouched.
+    expect(shared).not.toEqual(before)
+
+    const last = shared[1].content[0]
+    expect(last.providerOptions).toBeDefined()
+  })
+
+  test("a cloned slice keeps the original free of transform side effects", () => {
+    const shared = [
+      { role: "system", content: "SYSTEM" },
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+    ] as any[]
+    const before = structuredClone(shared)
+
+    // This is what SessionPrompt.ensureTitle does before building its request.
+    ProviderTransform.message(structuredClone(shared), claudeModel, {})
+
+    expect(shared).toEqual(before)
+  })
+})
+
+describe("LLMRequestPrep.prepare - concurrent request affinity", () => {
+  const sessionID = "ses_affinity"
+
+  const compatibleModel = {
+    id: "claude-opus-5",
+    providerID: "9Router",
+    api: { id: "claude-opus-5", url: "https://example.invalid/v1", npm: "@ai-sdk/openai-compatible" },
+    name: "Claude Opus 5",
+    capabilities: { temperature: true },
+    cost: { input: 0, output: 0 },
+    limit: { context: 200000, output: 8192 },
+    options: {},
+    headers: {},
+  } as any
+
+  const passthroughPlugin = {
+    trigger: (_name: string, _input: unknown, output: unknown) => Effect.succeed(output),
+    list: () => Effect.succeed([]),
+    init: () => Effect.void,
+  } as any
+
+  const prepare = (input: { agent: string; affinity?: string; tools?: Record<string, unknown> }) =>
+    LLMRequestPrep.prepare({
+      user: {
+        id: "msg_user",
+        sessionID,
+        role: "user",
+        time: { created: Date.now() },
+        agent: input.agent,
+        model: { providerID: "9Router", modelID: "claude-opus-5" },
+      } as any,
+      sessionID,
+      affinity: input.affinity,
+      model: compatibleModel,
+      agent: { name: input.agent, mode: "primary", options: {}, permission: [] } as any,
+      system: [],
+      messages: [{ role: "user", content: "hello" }],
+      tools: (input.tools ?? {}) as any,
+      provider: { id: "9Router", options: {} } as any,
+      auth: undefined,
+      plugin: passthroughPlugin,
+      flags: { outputTokenMax: 32_000, client: "test" } as any,
+      isWorkflow: false,
+    })
+
+  // `prepare` returns a union of provider-specific header shapes, so read them
+  // through a plain record view.
+  const header = (prepared: { headers: Record<string, string> }, name: string) => prepared.headers[name]
+
+  test("out-of-band requests do not share affinity with the assistant turn", async () => {
+    const title = await Effect.runPromise(prepare({ agent: "title", affinity: `${sessionID}:title` }))
+    const assistant = await Effect.runPromise(
+      prepare({ agent: "build", tools: { bash: { description: "run", inputSchema: { type: "object" } } } }),
+    )
+
+    expect(header(title, "x-session-affinity")).not.toBe(header(assistant, "x-session-affinity"))
+    expect(header(assistant, "x-session-affinity")).toBe(sessionID)
+    expect(header(title, "x-session-affinity")).toBe(`${sessionID}:title`)
+  })
+
+  test("the true session id is still reported for logging and telemetry", async () => {
+    const title = await Effect.runPromise(prepare({ agent: "title", affinity: `${sessionID}:title` }))
+    expect(header(title, "X-Session-Id")).toBe(sessionID)
+  })
+
+  test("affinity defaults to the session id when not supplied", async () => {
+    const assistant = await Effect.runPromise(prepare({ agent: "build" }))
+    expect(header(assistant, "x-session-affinity")).toBe(sessionID)
+  })
+})

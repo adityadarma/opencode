@@ -193,12 +193,12 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
             sessionModelUsage[modelKey].messages++
             sessionModelUsage[modelKey].cost += message.info.cost || 0
 
-            if (message.info.tokens) {
-              sessionModelUsage[modelKey].tokens.input += message.info.tokens.input || 0
-              sessionModelUsage[modelKey].tokens.output +=
-                (message.info.tokens.output || 0) + (message.info.tokens.reasoning || 0)
-              sessionModelUsage[modelKey].tokens.cache.read += message.info.tokens.cache?.read || 0
-              sessionModelUsage[modelKey].tokens.cache.write += message.info.tokens.cache?.write || 0
+            for (const part of message.parts) {
+              if (part.type !== "step-finish") continue
+              sessionModelUsage[modelKey].tokens.input += part.tokens.input || 0
+              sessionModelUsage[modelKey].tokens.output += (part.tokens.output || 0) + (part.tokens.reasoning || 0)
+              sessionModelUsage[modelKey].tokens.cache.read += part.tokens.cache?.read || 0
+              sessionModelUsage[modelKey].tokens.cache.write += part.tokens.cache?.write || 0
             }
           }
 

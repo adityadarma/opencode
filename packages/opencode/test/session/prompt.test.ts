@@ -726,6 +726,94 @@ it.instance("title generation usage is added to session cost/tokens", () =>
   }),
 )
 
+it.instance("title generation uses a distinct transport affinity from the assistant turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({})
+
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.text("world")
+
+    yield* prompt.loop({ sessionID: chat.id })
+
+    yield* pollWithTimeout(
+      sessions.get(chat.id).pipe(Effect.map((session) => (session.title === "E2E Title" ? true : undefined))),
+      "timed out waiting for title generation to complete",
+    )
+
+    const framing = "Generate a title for this conversation"
+    const hits = yield* llm.hits
+    const title = hits.filter((h) => JSON.stringify(h.body).includes(framing))
+    const assistant = hits.filter((h) => !JSON.stringify(h.body).includes(framing))
+
+    // Guard against a vacuous assertion: both requests must have been made.
+    expect(title.length).toBeGreaterThan(0)
+    expect(assistant.length).toBeGreaterThan(0)
+
+    const affinity = (h: (typeof hits)[number]) => h.headers["x-session-affinity"]
+
+    // The assistant turn keeps the plain session id.
+    for (const h of assistant) expect(affinity(h)).toBe(chat.id)
+
+    // Title requests must be distinguishable from it, while still reporting the
+    // true session id for logging/telemetry.
+    for (const h of title) {
+      expect(affinity(h)).not.toBe(chat.id)
+      expect(h.headers["x-session-id"]).toBe(chat.id)
+    }
+  }),
+)
+
+// Regression: title generation used to be forked alongside the assistant turn,
+// putting two requests for one session in flight at once. Providers and proxies
+// that group by session could not always keep them apart, and the title framing
+// ("output ONLY a thread title") leaked into the assistant turn — which then
+// came back as a bare title with no tool calls. Title must run after the turn.
+it.instance("title generation does not overlap the assistant turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({})
+
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.text("world")
+
+    yield* prompt.loop({ sessionID: chat.id })
+
+    yield* pollWithTimeout(
+      sessions.get(chat.id).pipe(Effect.map((session) => (session.title === "E2E Title" ? true : undefined))),
+      "timed out waiting for title generation to complete",
+    )
+
+    const framing = "Generate a title for this conversation"
+    const hits = yield* llm.hits
+    const isTitle = (h: (typeof hits)[number]) => JSON.stringify(h.body).includes(framing)
+
+    // Guard against a vacuous assertion: both requests must have been made.
+    expect(hits.filter(isTitle).length).toBeGreaterThan(0)
+    expect(hits.filter((h) => !isTitle(h)).length).toBeGreaterThan(0)
+
+    // Every assistant request must precede every title request. If the title were
+    // still forked, it would interleave and this ordering would not hold.
+    const lastAssistant = hits.findLastIndex((h) => !isTitle(h))
+    const firstTitle = hits.findIndex(isTitle)
+    expect(firstTitle).toBeGreaterThan(lastAssistant)
+  }),
+)
+
 it.instance("loop stops provider overflow instead of auto-compacting when disabled", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig((url) => ({

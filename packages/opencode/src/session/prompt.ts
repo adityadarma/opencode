@@ -205,7 +205,7 @@ const layer = Layer.effect(
       if (idx === -1) return
       if (input.history.filter(real).length !== 1) return
 
-      const context = input.history.slice(0, idx + 1)
+      const context = structuredClone(input.history.slice(0, idx + 1))
       const firstUser = context[idx]
       if (!firstUser || firstUser.info.role !== "user") return
       const firstInfo = firstUser.info
@@ -232,6 +232,7 @@ const layer = Layer.effect(
           tools: {},
           model: mdl,
           sessionID: input.session.id,
+          affinity: `${input.session.id}:title`,
           retries: 2,
           messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
         })
@@ -1092,6 +1093,7 @@ const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        let pendingTitle: Parameters<typeof title>[0] | undefined
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1139,13 +1141,20 @@ const layer = Layer.effect(
           }
 
           step++
+          // Deferred, not forked. Running title concurrently with the assistant
+          // turn puts two requests for one session in flight at once, which
+          // providers and proxies that group by session cannot always keep apart:
+          // the title framing ("output ONLY a thread title") can seed the shared
+          // conversation and the assistant turn then comes back as a bare title
+          // with no tool calls. Capture the inputs here and generate the title
+          // after the turn finishes.
           if (step === 1)
-            yield* title({
+            pendingTitle = {
               session,
               modelID: lastUser.model.modelID,
               providerID: lastUser.model.providerID,
               history: msgs,
-            }).pipe(Effect.ignore, Effect.forkIn(scope))
+            }
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
           const task = tasks.pop()
@@ -1343,6 +1352,14 @@ const layer = Layer.effect(
           if (outcome === "break") break
           continue
         }
+
+        // Sequential on purpose. The visible response has already streamed by now,
+        // so this only delays the session going idle. Forking here would let the
+        // title overlap an immediately-following prompt and reintroduce exactly the
+        // two-requests-per-session collision this avoids. The timeout keeps a
+        // hanging title request from wedging the session.
+        if (pendingTitle)
+          yield* title(pendingTitle).pipe(Effect.timeout("30 seconds"), Effect.ignore)
 
         yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
         return yield* lastAssistant(sessionID)
