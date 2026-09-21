@@ -1,0 +1,59 @@
+name: custom-build
+
+on:
+  push:
+    branches:
+      - custom
+  workflow_dispatch:
+
+concurrency:
+  group: custom-build
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build custom binaries
+        working-directory: packages/opencode
+        env:
+          OPENCODE_CHANNEL: custom
+          OPENCODE_VERSION: 0.0.0-custom-${{ github.run_number }}
+        run: bun run script/build.ts --skip-embed-web-ui
+
+      - name: Package release assets
+        working-directory: packages/opencode
+        env:
+          CUSTOM_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p release
+          for directory in dist/opencode-*; do
+            name="$(basename "$directory")"
+            if [[ "$name" == *linux* ]]; then
+              tar -czf "release/$name.tar.gz" -C "$directory/bin" .
+            else
+              (cd "$directory/bin" && zip -q -r "../../../release/$name.zip" .)
+            fi
+          done
+          sed "s|__GITHUB_REPOSITORY__|$CUSTOM_REPOSITORY|g" script/install-custom.sh > release/install.sh
+          chmod 755 release/install.sh
+
+      - name: Publish custom latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f custom-latest "$GITHUB_SHA"
+          git push origin refs/tags/custom-latest --force
+          if gh release view custom-latest >/dev/null 2>&1; then
+            gh release upload custom-latest packages/opencode/release/* --clobber
+            gh release edit custom-latest --target "$GITHUB_SHA" --title "Custom latest"
+          else
+            gh release create custom-latest packages/opencode/release/* --target "$GITHUB_SHA" --title "Custom latest" --notes "Automated build from branch custom."
+          fi

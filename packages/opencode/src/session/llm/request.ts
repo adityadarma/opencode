@@ -20,6 +20,7 @@ const USER_AGENT = `opencode/${InstallationVersion}`
 type PrepareInput = {
   readonly user: SessionV1.User
   readonly sessionID: string
+  readonly affinity?: string
   readonly parentSessionID?: string
   readonly model: Provider.Model
   readonly agent: Agent.Info
@@ -194,7 +195,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
             "User-Agent": USER_AGENT,
           }
         : {
-            "x-session-affinity": input.sessionID,
+            "x-session-affinity": input.affinity ?? input.sessionID,
             "X-Session-Id": input.sessionID,
             "User-Agent": USER_AGENT,
           }),

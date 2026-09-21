@@ -1,6 +1,7 @@
 import { Agent } from "@/agent/agent"
 import { Provider } from "@/provider/provider"
 import { LLM } from "@/session/llm"
+import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
 import { Slug } from "@opencode-ai/core/util/slug"
 import { LLMEvent } from "@opencode-ai/llm"
@@ -31,7 +32,8 @@ export const projectCopyHandlers = HttpApiBuilder.group(InstanceHttpApi, "projec
         (yield* provider.getSmallModel(fallback.providerID)) ??
         (yield* provider.getModel(fallback.providerID, fallback.modelID))
       const sessionID = SessionID.descending()
-      const result = yield* llm
+      let result = ""
+      yield* llm
         .stream({
           agent: COPY_NAME_AGENT,
           user: {
@@ -51,12 +53,20 @@ export const projectCopyHandlers = HttpApiBuilder.group(InstanceHttpApi, "projec
           messages: [{ role: "user", content: `Generate a short 2-3 word name that describes this task:\n${text}` }],
         })
         .pipe(
-          Stream.filter(LLMEvent.is.textDelta),
-          Stream.map((event) => event.text),
-          Stream.mkString,
+          Stream.runForEach((event) =>
+            Effect.gen(function* () {
+              if (LLMEvent.is.textDelta(event)) {
+                result += event.text
+                return
+              }
+              if (!LLMEvent.is.stepFinish(event) || !event.usage) return
+              const usage = Session.getUsage({ model, usage: event.usage, metadata: event.providerMetadata })
+              yield* Effect.logInfo("project copy name generation usage", { cost: usage.cost, tokens: usage.tokens })
+            }),
+          ),
         )
-      const output = result.trim()
-      return output ? slugify(output.split(/\s+/).slice(0, 3).join(" ")) : Slug.create()
+      result = result.trim()
+      return result ? slugify(result.split(/\s+/).slice(0, 3).join(" ")) : Slug.create()
     })
 
     return handlers.handle("generateName", (ctx) =>
