@@ -25,8 +25,7 @@ jobs:
         working-directory: packages/opencode
         env:
           OPENCODE_CHANNEL: custom
-          OPENCODE_VERSION: 0.0.0-custom-${{ github.run_number }}
-        run: bun run script/build.ts --skip-embed-web-ui
+        run: OPENCODE_VERSION="$(bun -e 'console.log((await Bun.file("package.json").json()).version + ":custom")')" bun run script/build.ts --skip-embed-web-ui
 
       - name: Package release assets
         working-directory: packages/opencode
